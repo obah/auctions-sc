@@ -3,74 +3,88 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
-/**
- *seller of the NFT deploys the contract with a starting price
- *auction last for 7 days
- *price of the NFT decreases over time
- *participants can buy the NFT can depositing ETH greater than the current price computed by the SC
- *aution ends as soon as a buyer buys it
- */
-contract DutchAuction {
+contract DutchAuction is IERC721Receiver {
     error AuctionEnded();
     error AddressZero();
 
     using Math for uint256;
     using Math for uint40;
 
-    IERC721 immutable NFT;
-    address payable immutable SELLER;
+    IERC721 public immutable NFT;
+    address payable public immutable SELLER;
     uint256 immutable NFT_ID;
     uint256 startingPrice;
-    uint40 immutable END_DATE;
-    uint40 immutable START_DATE;
+    uint256 discountRate;
+    uint40 public endDate;
+    uint40 public startDate;
     bool public auctionOpen;
 
-    constructor(address _nftAddress, uint256 _startingPrice, uint256 _nftId) {
+    constructor(address _nftAddress, uint256 _nftId) {
         if (_nftAddress == address(0)) revert AddressZero();
-        require(_startingPrice != 0, "price cant be 0");
 
-        END_DATE = uint40(block.timestamp + 7 days);
-        START_DATE = uint40(block.timestamp);
+        SELLER = payable(msg.sender);
         NFT = IERC721(_nftAddress);
         NFT_ID = _nftId;
+    }
+
+    function startAuction(uint256 _startingPrice, uint _discountRate) external {
+        //todo add only owner requirement
+        if (msg.sender == address(0)) revert AddressZero();
+        require(msg.sender == SELLER, "unathorized");
+        require(_startingPrice != 0, "price cant be 0");
+
+        startDate = uint40(block.timestamp);
+        endDate = uint40(block.timestamp + 7 days);
         startingPrice = _startingPrice;
-        SELLER = payable(msg.sender);
+
         transferNft(msg.sender, address(this));
+
+        discountRate = _discountRate;
+
         auctionOpen = true;
     }
 
-    function buyNft(uint _amount) external payable {
-        if (block.timestamp > END_DATE) revert AuctionEnded();
+    function buyNft() external payable {
+        if (block.timestamp > endDate) revert AuctionEnded();
         if (!auctionOpen) revert AuctionEnded();
         if (msg.sender == address(0)) revert AddressZero();
 
         uint256 _currentPrice = getPrice();
 
-        require(_amount > _currentPrice, "amount too low");
+        require(msg.value > _currentPrice, "amount too low");
 
-        SELLER.transfer(_amount);
+        (bool sent, ) = SELLER.call{value: msg.value}("");
+        require(sent, "failed to send ETH");
+
         auctionOpen = false;
         transferNft(address(this), msg.sender);
     }
 
     //reduce the price by 1% every day
     function getPrice() private view returns (uint256) {
-        if (block.timestamp > END_DATE) revert AuctionEnded();
+        if (block.timestamp > endDate) revert AuctionEnded();
         if (!auctionOpen) revert AuctionEnded();
 
         uint256 _price = startingPrice;
 
-        uint40 _timeGone = END_DATE - uint40(block.timestamp);
-        uint40 _daysGone = uint40(Math.ceilDiv(_timeGone, 1 days));
+        uint40 _timeElapsed = endDate - uint40(block.timestamp);
+        uint256 _discount = discountRate * _timeElapsed;
 
-        uint256 _onePercentPrice = (_price * 1) / 100;
-        uint256 _priceGone = _daysGone - _onePercentPrice;
-
-        return _price - _priceGone;
+        return _price - _discount;
     }
 
     function transferNft(address _from, address _to) internal {
         NFT.safeTransferFrom(_from, _to, NFT_ID);
+    }
+
+    function onERC721Received(
+        address operator,
+        address from,
+        uint256 tokenId,
+        bytes calldata data
+    ) external override returns (bytes4) {
+        return this.onERC721Received.selector;
     }
 }
