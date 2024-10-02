@@ -84,7 +84,7 @@ contract DutchAuction is IERC721Receiver {
         address from,
         uint256 tokenId,
         bytes calldata data
-    ) external override returns (bytes4) {
+    ) external pure override returns (bytes4) {
         return this.onERC721Received.selector;
     }
 }
